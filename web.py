@@ -1,71 +1,62 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROS 2 Web Interface</title>
-    <script type="text/javascript" src="http://cdn.robotwebtools.org/EventEmitter2/current/eventemitter2.min.js"></script>
-    <script type="text/javascript" src="http://cdn.robotwebtools.org/roslibjs/current/roslib.min.js"></script>
-    <script type="text/javascript">
-        // Connect to ROS
-        var ros = new ROSLIB.Ros({
-            url: 'ws://YOUR_ROS2_SERVER_IP:9090' // Replace with your ROS 2 server IP
-        });
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+import json
+import asyncio
+import websockets
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+import threading
 
-        ros.on('connection', function () {
-            console.log('Connected to ROS 2 server.');
-        });
+class Nav2WebSocketServer(Node):
+    def __init__(self):
+        super().__init__('nav2_websocket_server')
+        self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.create_websocket_server()
 
-        ros.on('error', function (error) {
-            console.log('Error connecting to ROS 2 server:', error);
-        });
+    async def create_websocket_server(self, websocket, path):
+        print("WebSocket connection established")
+        try:
+            async for message in websocket:
+                try:
+                    command = json.loads(message)
+                    # Assuming 'command' is a JSON object containing navigation commands
+                    # Process the command and control Nav2 accordingly
+                    # Example:
+                    linear_x = command.get('linear_x', 0.0)
+                    angular_z = command.get('angular_z', 0.0)
+                    twist_msg = Twist()
+                    twist_msg.linear.x = linear_x
+                    twist_msg.angular.z = angular_z
+                    self.publisher.publish(twist_msg)
+                except Exception as e:
+                    print("Error processing command:", e)
+        except websockets.exceptions.ConnectionClosedOK:
+            print("WebSocket connection closed")
 
-        ros.on('close', function () {
-            console.log('Connection to ROS 2 server closed.');
-        });
+def serve_http():
+    # Serve the HTML content
+    Handler = SimpleHTTPRequestHandler
+    with HTTPServer(('0.0.0.0', 8000), Handler) as httpd:
+        print("HTTP server started on port 8000")
+        httpd.serve_forever()
 
-        // Subscribe to a ROS 2 topic
-        var listener = new ROSLIB.Topic({
-            ros: ros,
-            name: '/your_topic_name',
-            messageType: 'your_message_type' // Replace with the message type of your topic
-        });
+def main(args=None):
+    rclpy.init(args=args)
+    nav2_websocket_server = Nav2WebSocketServer()
+    
+    # Start the HTTP server in a separate thread
+    http_thread = threading.Thread(target=serve_http)
+    http_thread.start()
 
-        listener.subscribe(function (message) {
-            console.log('Received message:', message);
-            // Update your web interface with the received message
-        });
+    try:
+        start_server = websockets.serve(nav2_websocket_server.create_websocket_server, '0.0.0.0', 9090)
+        asyncio.get_event_loop().run_until_complete(start_server)
+        print("WebSocket server listening on port 9090")
+        asyncio.get_event_loop().run_forever()
+    except KeyboardInterrupt:
+        pass
+    nav2_websocket_server.destroy_node()
+    rclpy.shutdown()
 
-        // Publish teleoperation commands
-        var cmdVel = new ROSLIB.Topic({
-            ros: ros,
-            name: '/cmd_vel',
-            messageType: 'geometry_msgs/Twist'
-        });
-
-        function publishCommand(linearX, angularZ) {
-            var twist = new ROSLIB.Message({
-                linear: {
-                    x: linearX,
-                    y: 0.0,
-                    z: 0.0
-                },
-                angular: {
-                    x: 0.0,
-                    y: 0.0,
-                    z: angularZ
-                }
-            });
-            cmdVel.publish(twist);
-        }
-    </script>
-</head>
-<body>
-    <h1>ROS 2 Web Interface</h1>
-    <!-- Your HTML content and controls here -->
-    <button onclick="publishCommand(0.5, 0.0)">Forward</button>
-    <button onclick="publishCommand(-0.5, 0.0)">Backward</button>
-    <button onclick="publishCommand(0.0, 0.5)">Rotate Left</button>
-    <button onclick="publishCommand(0.0, -0.5)">Rotate Right</button>
-</body>
-</html>
+if __name__ == '__main__':
+    main()
